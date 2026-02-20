@@ -1,0 +1,216 @@
+---
+title: 'US Residential Construction Spending'
+author: "Ankit Mishra"
+format:
+  html:
+    fig-align: center
+    embed-resources: true
+    code-fold: true
+    toc: true
+execute:
+  warning: false
+---
+```{python}
+# Load libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from statsforecast import StatsForecast
+from statsforecast.models import (
+    Naive, SeasonalNaive, RandomWalkWithDrift,
+    HistoricAverage, WindowAverage
+)
+from statsmodels.tsa.seasonal import seasonal_decompose, STL
+
+df = pd.read_excel(r"C:\Users\akm10\Time_Series_Data_Analysis\Dataset\construction_spending.xlsx")
+```
+
+# Data Description
+
+The assigned time series dataset consists of monthly U.S. construction spending measured in nominal dollar terms, spanning from January 2002 to November 2024. The data record total construction outlays across residential, non-residential, and public projects, reported at a monthly frequency. This dataset is publicly published by the U.S. Census Bureau and is commonly accessed through government releases and economic data platforms such as FRED. Each observation reflects aggregated spending levels for a given month, making it a macroeconomic indicator used to track investment activity in the construction sector.
+
+The data-generating process is driven by several structural and cyclical factors. Key sources of variation include overall economic growth, interest rates and credit availability, government infrastructure spending, housing demand, and seasonality related to weather and construction cycles. Shocks such as recessions, pandemics, or rapid monetary tightening can cause abrupt changes, while long-term trends reflect inflation, population growth, and urban development. Forecasting this variable is moderately difficult: while strong trend and seasonal patterns can be modeled effectively, the series is sensitive to policy changes and economic shocks that are hard to anticipate, which can reduce forecast accuracy during periods of volatility.
+
+# Exploratory Data Analysis
+
+```{python}
+df['date'] = pd.to_datetime(df['date'])
+
+plt.figure(figsize=(10,5))
+plt.plot(df['date'], df['construction_spending'])
+plt.title("U.S. Construction Spending Over Time")
+plt.xlabel("Year")
+plt.ylabel("Construction Spending (Billions of USD)")
+plt.show()
+```
+The line chart shows a strong upward long-term trend in U.S. construction spending, reflecting economic growth, inflation, and population expansion. Superimposed on this trend is a pronounced seasonal pattern, with recurring peaks and troughs that likely correspond to weather conditions and fiscal-year spending cycles. Noticeable downturns occur during major economic shocks, particularly around the 2008–09 financial crisis and the 2020 COVID-19 pandemic, followed by recoveries. The presence of both trend and seasonality indicates that the series is non-stationary and that any forecasting model must explicitly account for these components.
+
+```{python}
+plt.figure(figsize=(8,5))
+plt.hist(df['construction_spending'], bins=30)
+plt.title("Histogram of Construction Spending")
+plt.xlabel("Construction Spending (Billions of USD)")
+plt.ylabel("Frequency")
+plt.show()
+```
+The histogram reveals a right-skewed distribution, with more observations concentrated at lower spending levels and a longer tail toward higher values. This skewness reflects the long-term growth of the series rather than random variation around a constant mean.
+
+```{python}
+df['construction_spending'].plot(kind='density', figsize=(8,5))
+plt.title("Density Plot of Construction Spending")
+plt.xlabel("Construction Spending (Billions of USD)")
+plt.show()
+```
+The density plot reinforces the skewness observed in the histogram. The distribution is unimodal but asymmetric, consistent with a trending macroeconomic variable whose scale increases over time.
+
+```{python}
+plt.figure(figsize=(6,5))
+plt.boxplot(df['construction_spending'], vert=False)
+plt.title("Boxplot of Construction Spending")
+plt.xlabel("Construction Spending (Billions of USD)")
+plt.show()
+```
+
+The boxplot highlights several high-value outliers, which correspond to recent years when construction spending reached historically high levels. These are not anomalies in the data but rather reflect structural growth and inflationary effects.
+
+```{python}
+summary_stats = pd.DataFrame({
+    "Statistic": [
+        "Observations", "Mean", "Median", "Mode",
+        "Standard Deviation", "Minimum", "Maximum", "Range"
+    ],
+    "Value": [
+        len(df),
+        df['construction_spending'].mean(),
+        df['construction_spending'].median(),
+        df['construction_spending'].mode()[0],
+        df['construction_spending'].std(),
+        df['construction_spending'].min(),
+        df['construction_spending'].max(),
+        df['construction_spending'].max() - df['construction_spending'].min()
+    ]
+})
+
+summary_stats
+```
+
+The summary statistics confirm substantial variability in construction spending over time. The large range and standard deviation reflect long-term growth and economic cycles rather than short-term noise. The mean exceeding the median is consistent with the right-skewed distribution observed in the plots.
+
+There are no clear data errors, but the boxplot identifies high-end outliers associated with recent periods of elevated construction activity. These values are economically meaningful and should not be removed. The data exhibit a strong trend, possible seasonality, and sensitivity to macroeconomic shocks such as recessions and policy changes. As a result, while the series contains predictable components, forecasting can be challenging during periods of economic instability.
+
+# Moving Average Visualization
+
+```{python}
+df['MA_12'] = df['construction_spending'].rolling(window=12).mean()
+
+plt.figure(figsize=(10,5))
+plt.plot(df['date'], df['construction_spending'], label="Original Series", alpha=0.6)
+plt.plot(df['date'], df['MA_12'], label="12-Month Moving Average", linewidth=2)
+plt.title("U.S. Construction Spending with 12-Month Moving Average")
+plt.xlabel("Year")
+plt.ylabel("Construction Spending (Billions of USD)")
+plt.legend()
+plt.show()
+```
+
+The moving average smooths out high-frequency volatility and reveals a clear long-term trend in construction spending. The underlying trajectory shows a decline during the 2008–09 financial crisis, a gradual recovery in the following decade, and a sharp increase after 2020. The moving average confirms that much of the variation in the raw series is driven by persistent structural forces rather than random noise.
+
+# Remainder Series
+
+```{python}
+df['REMAINDER'] = df['construction_spending'] - df['MA_12']
+
+plt.figure(figsize=(10,5))
+plt.plot(df['date'], df['REMAINDER'])
+plt.axhline(0)
+plt.title("Remainder Series After Removing 12-Month Moving Average")
+plt.xlabel("Year")
+plt.ylabel("Deviation from Trend")
+plt.show()
+```
+
+The remainder series exhibits regular oscillations around zero, indicating the presence of systematic variation not captured by the moving average. These oscillations appear periodic rather than random, suggesting that seasonality remains in the data even after trend smoothing. Occasional larger deviations correspond to economic shocks, but the dominant remaining structure is cyclical.
+
+# Seasonality Assessment via Time Series Decomposition
+
+```{python}
+from statsmodels.tsa.seasonal import seasonal_decompose
+
+decomp = seasonal_decompose(df.set_index('date')['construction_spending'], model='additive', period=12)
+decomp.plot()
+plt.show()
+```
+
+The decomposition reveals a strong and persistent seasonal component. The seasonal pattern is stable over time, with recurring peaks and troughs occurring at similar points each year. This aligns well with expectations for construction activity, which is heavily influenced by weather conditions, fiscal-year budgeting, and planning cycles. The trend component mirrors the moving average results, while the remainder captures irregular shocks and short-term volatility.
+
+```{python}
+df = df.set_index('date')
+# Seasonal naive forecast (period = 12 months)
+forecast_horizon = 6
+seasonal_lag = 12
+
+forecast_values = df['construction_spending'][-seasonal_lag:-seasonal_lag + forecast_horizon].values
+forecast_index = pd.date_range(
+    start=df.index[-1] + pd.offsets.MonthBegin(),
+    periods=forecast_horizon,
+    freq='MS'
+)
+
+forecast = pd.Series(forecast_values, index=forecast_index)
+
+# Plot
+plt.figure(figsize=(10,5))
+plt.plot(df.index, df['construction_spending'], label="Observed")
+plt.plot(forecast.index, forecast, label="6-Month Seasonal Naïve Forecast", linestyle="--")
+plt.title("Seasonal Naïve Forecast of U.S. Construction Spending")
+plt.xlabel("Year")
+plt.ylabel("Construction Spending (Billions of USD)")
+plt.legend()
+plt.show()
+```
+
+The seasonal naïve forecast closely mirrors the recurring annual pattern observed in the historical data. By repeating values from the same months in the prior year, the forecast successfully captures the seasonal structure of construction spending. This makes it a more appropriate baseline than a simple naïve forecast, which would fail to account for systematic seasonal fluctuations.
+
+However, the forecast does not capture trend dynamics. Because construction spending has exhibited a strong upward trend in recent years, the seasonal naïve model is likely to underestimate future values during periods of sustained growth. As a result, while the forecast reflects short-term seasonal behavior well, it may lag behind the true level of the series.
+
+# Naïve Forecast with Drift
+
+```{python}
+# Forecast horizon
+h = 6
+
+# Calculate drift
+y = df['construction_spending']
+drift = (y.iloc[-1] - y.iloc[0]) / (len(y) - 1)
+
+# Create forecast
+forecast_index = pd.date_range(
+    start=df.index[-1] + pd.offsets.MonthBegin(),
+    periods=h,
+    freq='MS'
+)
+
+drift_forecast = pd.Series(
+    [y.iloc[-1] + drift * i for i in range(1, h + 1)],
+    index=forecast_index
+)
+
+# Plot
+plt.figure(figsize=(10,5))
+plt.plot(df.index, df['construction_spending'], label="Observed")
+plt.plot(drift_forecast.index, drift_forecast,
+         linestyle="--", label="6-Month Naïve Forecast with Drift")
+plt.title("Naïve Forecast with Drift: U.S. Construction Spending")
+plt.xlabel("Year")
+plt.ylabel("Construction Spending (Billions of USD)")
+plt.legend()
+plt.show()
+```
+
+The naïve forecast with drift provides a useful benchmark for understanding the trend-driven behavior of the series, but it is incomplete when seasonality is significant. In this dataset, the drift model captures long-term growth more effectively than a simple naïve forecast, yet performs worse than a seasonal naïve model in representing month-to-month variation. This highlights the need for forecasting approaches that jointly model trend and seasonality, such as SARIMA or Holt–Winters exponential smoothing.
+
+# Conclusion
+
+This analysis examined U.S. construction spending as a monthly time series and identified several defining characteristics of the data. The series exhibits a strong upward long-term trend, pronounced and stable seasonality, and sensitivity to major macroeconomic shocks such as the 2008–09 financial crisis and the COVID-19 pandemic. Exploratory visualizations, moving averages, and decomposition confirmed that the series is non-stationary, with both trend and seasonal components playing a significant role in shaping its behavior.
+
+Baseline forecasting approaches were evaluated using seasonal naïve and naïve-with-drift models. The seasonal naïve forecast effectively captured recurring intra-year patterns but failed to account for ongoing growth, while the drift-based forecast represented the long-run trend but ignored seasonality. Together, these results highlight the limitations of naïve methods and underscore the importance of models that jointly incorporate trend and seasonality. Overall, the findings suggest that more structured time-series models are necessary to accurately forecast construction spending, particularly during periods of economic change.
