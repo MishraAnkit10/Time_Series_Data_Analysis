@@ -1,0 +1,370 @@
+---
+title: 'US Residential Construction Spending - ARIMA Modeling and Forecasting'
+author: "Ankit Mishra"
+format:
+  html:
+    fig-align: center
+    embed-resources: true
+    code-fold: true
+    toc: true
+execute:
+  warning: false
+---
+
+# Data Manipulation and Stationarity Analysis
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.tsa.stattools import kpss
+
+df = pd.read_excel(r"C:\Users\akm10\Downloads\construction_spending.xlsx")
+df["date"] = pd.to_datetime(df["date"])
+df = df.set_index("date")
+
+ts = df["construction_spending"].dropna()
+```
+
+```{python}
+# ---------------------------------------------------
+# Plot original series
+# ---------------------------------------------------
+
+plt.figure()
+plt.plot(ts)
+plt.title("Original Construction Spending Time Series")
+plt.xlabel("Date")
+plt.ylabel("Spending")
+plt.show()
+
+print("Figure 1: Original Construction Spending Time Series")
+```
+This plot shows a clear upward long-term trend in construction spending, along with strong recurring seasonal fluctuations. Because the mean changes over time, the series is not mean stationary. 
+
+```{python}
+# ---------------------------------------------------
+# Rolling standard deviation (variance stationarity)
+# ---------------------------------------------------
+
+rolling_sd = ts.rolling(12).std()
+
+plt.figure()
+plt.plot(rolling_sd)
+plt.title("Rolling 12-Month Standard Deviation")
+plt.xlabel("Date")
+plt.ylabel("Rolling SD")
+plt.show()
+
+print("Figure 2: Rolling 12-Month Standard Deviation")
+```
+The rolling standard deviation shows significant variability over time, indicating that the variance is not constant. This suggests that the series is not variance stationary.
+
+```{python}
+# ---------------------------------------------------
+# Log transformation (variance stabilization)
+# ---------------------------------------------------
+
+ts_log = np.log(ts)
+
+plt.figure()
+plt.plot(ts_log)
+plt.title("Log-Transformed Series")
+plt.xlabel("Date")
+plt.ylabel("Log Spending")
+plt.show()
+print("Figure 3: Log-Transformed Series")
+```
+The log transformation has helped to stabilize the variance, as the fluctuations appear more consistent over time. However, the series still exhibits a strong upward trend and seasonality, so it is not yet mean stationary.
+
+```{python}
+# ---------------------------------------------------
+# Seasonal differencing (monthly data, lag = 12)
+# ---------------------------------------------------
+
+ts_seasonal_diff = ts_log.diff(12).dropna()
+
+plt.figure()
+plt.plot(ts_seasonal_diff)
+plt.title("Seasonally Differenced Series (Lag 12)")
+plt.xlabel("Date")
+plt.ylabel("Differenced Log Spending")
+plt.show()
+print("Figure 4: Seasonally Differenced Series (Lag 12)")
+```
+Seasonal differencing has removed the strong seasonal pattern, but there is still an upward trend visible in the data. The series is closer to being mean stationary, but we will need to perform one more differencing step to fully remove the trend and achieve mean stationarity.
+
+```{python}
+# ---------------------------------------------------
+# KPSS test function
+# ---------------------------------------------------
+
+def kpss_test(series, title):
+    statistic, p_value, lags, critical = kpss(series, regression="c", nlags="auto")
+    print(f"\nKPSS Test: {title}")
+    print(f"Test Statistic: {statistic:.4f}")
+    print(f"P-value: {p_value:.4f}")
+    print(f"Lags Used: {lags}")
+    print(f"Critical Values: {critical}")
+
+# KPSS after log + seasonal differencing
+kpss_test(ts_seasonal_diff, "Log + Seasonal Differencing")
+
+# ---------------------------------------------------
+# First differencing (mean stationarity)
+# ---------------------------------------------------
+
+ts_diff = ts_seasonal_diff.diff().dropna()
+
+plt.figure()
+plt.plot(ts_diff)
+plt.title("Final Differenced Series (Mean Stationary)")
+plt.xlabel("Date")
+plt.ylabel("Differenced Values")
+plt.show()
+print("Figure 5: Final Differenced Series (Mean Stationary)")
+```
+After applying first differencing to the seasonally differenced series, the upward trend has been removed, and the series appears to fluctuate around a constant mean. This suggests that the series is now mean stationary and ready for ARIMA modeling.
+
+```{python}
+# KPSS after first differencing
+kpss_test(ts_diff, "Log + Seasonal + First Differencing")
+
+# ---------------------------------------------------
+# Final stationary series for ARIMA modeling
+# ---------------------------------------------------
+
+ts_stationary = ts_diff
+```
+
+# ACF and PACF Plots
+```{python}
+import matplotlib.pyplot as plt
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+# ---------------------------------------------------
+# ACF Plot
+# ---------------------------------------------------
+
+plt.figure()
+plot_acf(ts_stationary, lags=36)
+plt.title("ACF of Transformed Construction Spending Series")
+plt.xlabel("Lag")
+plt.ylabel("Autocorrelation")
+plt.show()
+print("Figure 6: ACF of Transformed Construction Spending Series")
+```
+
+The ACF plot shows significant autocorrelation at lag 1 and several seasonal lags (e.g., lag 12, 24), which is expected given the original seasonality in the data. The slow decay in the ACF suggests that an AR component may be needed in the ARIMA model to capture the remaining autocorrelation structure.
+
+```{python}
+# ---------------------------------------------------
+# PACF Plot
+# ---------------------------------------------------
+
+plt.figure()
+plot_pacf(ts_stationary, lags=36, method="ywm")
+plt.title("PACF of Transformed Construction Spending Series")
+plt.xlabel("Lag")
+plt.ylabel("Partial Autocorrelation")
+plt.show()
+print("Figure 7: PACF of Transformed Construction Spending Series")
+```
+
+The PACF plot shows a significant spike at lag 1, which suggests that an AR(1) term may be appropriate for the ARIMA model. The significant spikes at seasonal lags (e.g., lag 12) also indicate that a seasonal AR term may be needed to capture the remaining seasonal autocorrelation in the data.
+
+# ARIMA Model Selection, Auto ARIMA, and In-Sample Fit
+```{python}
+# ---------------------------------------------------
+# ARIMA Model Selection, Auto ARIMA, and In-Sample Fit
+# Construction Spending Time Series
+# ---------------------------------------------------
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.tsa.arima.model import ARIMA
+import pmdarima as pm
+
+# ---------------------------------------------------
+# Fit candidate ARIMA / SARIMA models
+# ---------------------------------------------------
+
+candidate_models = {
+    "ARIMA(1,1,1)(0,1,0,12)": ((1,1,1), (0,1,0,12)),
+    "ARIMA(1,1,1)(0,1,1,12)": ((1,1,1), (0,1,1,12)),
+    "ARIMA(2,1,1)(0,1,1,12)": ((2,1,1), (0,1,1,12)),
+    "ARIMA(1,1,2)(0,1,1,12)": ((1,1,2), (0,1,1,12))
+}
+
+results = []
+
+for name, (order, seasonal_order) in candidate_models.items():
+    model = ARIMA(ts_log, order=order, seasonal_order=seasonal_order)
+    fitted = model.fit()
+    results.append({
+        "Model": name,
+        "AIC": fitted.aic,
+        "BIC": fitted.bic
+    })
+
+results_df = pd.DataFrame(results).sort_values("AIC")
+print("\nManual ARIMA Model Comparison:")
+print(results_df)
+
+# ---------------------------------------------------
+# Best manual model
+# ---------------------------------------------------
+
+best_manual = results_df.iloc[0]["Model"]
+print(f"\nBest Manual Model (by AIC): {best_manual}")
+
+# ---------------------------------------------------
+# Automated ARIMA (Python equivalent of fable::ARIMA)
+# ---------------------------------------------------
+
+auto_model = pm.auto_arima(
+    ts_log,
+    seasonal=True,
+    m=12,
+    d=1,
+    D=1,
+    stepwise=True,
+    suppress_warnings=True,
+    trace=True
+)
+
+print("\nAutomated ARIMA Model:")
+print(auto_model.summary())
+
+# ---------------------------------------------------
+# Fit final chosen model (manual winner)
+# ---------------------------------------------------
+
+final_model = ARIMA(
+    ts_log,
+    order=(1,1,1),
+    seasonal_order=(0,1,1,12)
+).fit()
+
+# ---------------------------------------------------
+# In-sample fitted values
+# ---------------------------------------------------
+
+fitted_values = final_model.fittedvalues
+actual_values = ts_log.loc[fitted_values.index]
+
+# ---------------------------------------------------
+# Plot observed vs fitted values
+# ---------------------------------------------------
+
+plt.figure()
+plt.plot(actual_values, label="Observed")
+plt.plot(fitted_values, label="Fitted", linestyle="--")
+plt.title("Observed vs Fitted Values (In-Sample)")
+plt.xlabel("Date")
+plt.ylabel("Log Construction Spending")
+plt.legend()
+plt.show()
+print("Figure 8: Observed vs Fitted Values (In-Sample)")
+```
+The in-sample fit shows that the ARIMA(1,1,2)(0,1,1)[12] model captures the overall trend and seasonal patterns in the log-transformed construction spending data reasonably well. However, there are some periods where the fitted values deviate from the observed values, particularly during times of rapid change. This suggests that while the model captures the general structure of the data, there may still be room for improvement in terms of capturing all the nuances in the time series.
+
+# Residual Diagnostics and Forecasting
+```{python}
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import matplotlib.pyplot as plt
+
+# ---------------------------------------------------
+# Fit automated ARIMA model
+# ARIMA(1,1,2)(0,1,1)[12]
+# ---------------------------------------------------
+
+final_model = ARIMA(
+    ts_log,
+    order=(1,1,2),
+    seasonal_order=(0,1,1,12)
+).fit()
+
+# ---------------------------------------------------
+# Residuals
+# ---------------------------------------------------
+
+residuals = final_model.resid.dropna()
+
+plt.figure()
+plt.plot(residuals)
+plt.title("Residuals from ARIMA(1,1,2)(0,1,1)[12]")
+plt.xlabel("Date")
+plt.ylabel("Residuals")
+plt.show()
+
+# ---------------------------------------------------
+# Ljung-Box Test
+# ---------------------------------------------------
+
+ljung_box = acorr_ljungbox(residuals, lags=[12], return_df=True)
+print("\nLjung-Box Results:")
+print(ljung_box)
+
+# ---------------------------------------------------
+# Residual ACF
+# ---------------------------------------------------
+
+plt.figure()
+plot_acf(residuals, lags=36)
+plt.title("Residual ACF")
+plt.show()
+
+# ---------------------------------------------------
+# Residual PACF
+# ---------------------------------------------------
+
+plt.figure()
+plot_pacf(residuals, lags=36, method="ywm")
+plt.title("Residual PACF")
+plt.show()
+
+# ---------------------------------------------------
+# 6-step Forecast
+# ---------------------------------------------------
+
+forecast = final_model.get_forecast(steps=6)
+forecast_mean = forecast.predicted_mean
+forecast_ci = forecast.conf_int()
+
+plt.figure()
+plt.plot(ts_log, label="Observed")
+plt.plot(forecast_mean, label="Forecast", linestyle="--")
+plt.fill_between(
+    forecast_ci.index,
+    forecast_ci.iloc[:,0],
+    forecast_ci.iloc[:,1],
+    alpha=0.3
+)
+plt.title("6-Period Forecast (Log Scale)")
+plt.xlabel("Date")
+plt.ylabel("Log Construction Spending")
+plt.legend()
+plt.show()
+
+print("\n6-Step Forecast Values:")
+print(forecast_mean)
+```
+
+Residual Diagnostics
+
+Residuals from the ARIMA(1,1,2)(0,1,1) [12] model fluctuate randomly around zero with no visible trend or seasonality. The Ljung–Box test at lag 12 yields a p-value greater than 0.05, indicating failure to reject the null hypothesis of no autocorrelation.
+
+Conclusion on Residuals
+
+These results indicate that the residuals behave approximately as white noise, implying that the automated ARIMA model provides an adequate representation of the underlying data-generating process.
+
+# Forecasting
+
+A six-period forecast was generated from the end of the sample. The forecast continues the existing upward trend while preserving seasonal behavior. The forecasted values lie within reasonable confidence intervals and evolve smoothly from recent observations.
+
+This suggests the model produces plausible short-term forecasts, though uncertainty increases with the forecast horizon, as expected.
+
+The automated ARIMA(1,1,2)(0,1,1) [12] model yields white-noise residuals and reasonable short-term forecasts, supporting its suitability for modeling and predicting construction spending.
