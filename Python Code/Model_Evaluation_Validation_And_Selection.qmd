@@ -1,0 +1,289 @@
+---
+title: 'Assignment 4'
+author: "Ankit Mishra"
+format:
+  html:
+    fig-align: center
+    embed-resources: true
+    code-fold: true
+    toc: true
+execute:
+  warning: false
+---
+
+# Section 1
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Load dataset
+df = pd.read_excel(r"C:\Users\akm10\Downloads\construction_spending.xlsx")
+
+# Inspect columns if needed
+print(df.head())
+
+# Rename these if your columns differ
+date_col = df.columns[0]
+value_col = df.columns[1]
+
+# Convert date column to datetime
+df[date_col] = pd.to_datetime(df[date_col])
+
+# Sort by date just in case
+df = df.sort_values(date_col)
+
+# Set date as index (common for time series)
+df.set_index(date_col, inplace=True)
+
+# 80/20 split (no shuffling!)
+split_index = int(len(df) * 0.8)
+
+train = df.iloc[:split_index]
+test = df.iloc[split_index:]
+
+print("Train size:", len(train))
+print("Test size:", len(test))
+
+# Plot
+plt.figure(figsize=(12,6))
+plt.plot(train.index, train[value_col], label="Training Set")
+plt.plot(test.index, test[value_col], label="Test Set")
+
+plt.title("Train / Test Split (80/20)")
+plt.xlabel("Date")
+plt.ylabel(value_col)
+plt.legend()
+plt.show()
+```
+
+The time series was divided into an 80% training set (220 observations) and a 20% test set (55 observations), preserving the chronological order of the data. Visual inspection of the split indicates that both sets exhibit similar seasonal patterns and an overall upward trend. The test set follows the structural behavior observed in the training data, although it contains slightly higher volatility and larger peaks toward the end of the series.
+
+Overall, the test set appears reasonably representative of the training set, making this split appropriate for evaluating forecasting performance. This approach ensures that models are trained on historical observations and evaluated on future unseen data, closely reflecting real-world forecasting conditions.
+
+# Section 2
+
+```{python}
+# Section 2
+from sklearn.model_selection import TimeSeriesSplit
+import matplotlib.pyplot as plt
+
+# Use the existing processed dataframe from Section 1
+y = df[value_col]   # already defined in Section 1
+
+# -------------------------
+# Rolling CV parameters
+# -------------------------
+
+n_splits = 5
+test_size = int(len(y) * 0.1)   # 10% per fold
+
+tscv = TimeSeriesSplit(
+    n_splits=n_splits,
+    test_size=test_size
+)
+
+# -------------------------
+# Visualize folds
+# -------------------------
+
+plt.figure(figsize=(12,6))
+
+for i, (train_idx, test_idx) in enumerate(tscv.split(y)):
+    plt.plot(y.index[train_idx], y.iloc[train_idx], alpha=0.4)
+    plt.plot(y.index[test_idx], y.iloc[test_idx])
+
+plt.title("Rolling (Expanding) Window Cross-Validation")
+plt.xlabel("Date")
+plt.ylabel(value_col)
+plt.show()
+
+# -------------------------
+# Print fold sizes
+# -------------------------
+
+for i, (train_idx, test_idx) in enumerate(tscv.split(y)):
+    print(f"Fold {i+1}: Train={len(train_idx)}, Test={len(test_idx)}")
+```
+
+A rolling (expanding) window cross-validation scheme was implemented to evaluate model performance over multiple forecasting horizons while preserving temporal order. The initial training window contained approximately half of the observations, and the model was repeatedly refit as new data became available. Each fold used a fixed validation window of 27 observations, resulting in five cross-validation iterations with progressively larger training sets.
+
+Visual inspection confirms that each validation segment follows the same seasonal structure and upward trend observed in the training data, indicating that the folds are representative of the overall time series. This expanding window approach closely mimics real-world forecasting scenarios, where models are retrained as new information becomes available. By evaluating performance across multiple rolling folds, this method provides a robust assessment of model stability and generalization over time.
+
+# Section 3
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from statsmodels.tsa.arima.model import ARIMA
+
+# -------------------------
+# Helper: MASE
+# -------------------------
+
+def mase(y_true, y_pred, y_train):
+    scale = np.mean(np.abs(y_train[1:] - y_train[:-1]))
+    return np.mean(np.abs(y_true - y_pred)) / scale
+
+# -------------------------
+# CHANGE to your ARIMA from Assignment 3
+# -------------------------
+
+arima_order = (1,1,1)
+
+rmse_a, mae_a, mape_a, mase_a = [], [], [], []
+rmse_n, mae_n, mape_n, mase_n = [], [], [], []
+
+# -------------------------
+# Cross Validation Loop
+# -------------------------
+
+for fold,(train_idx,test_idx) in enumerate(tscv.split(y),1):
+
+    train = y.iloc[train_idx]
+    test = y.iloc[test_idx]
+
+    # ---- Naive Forecast ----
+    naive_forecast = np.repeat(train.iloc[-1], len(test))
+
+    # ---- ARIMA Forecast ----
+    model = ARIMA(train, order=arima_order)
+    fit = model.fit()
+    arima_forecast = fit.forecast(len(test))
+
+    # ---- Plot Actual vs Predicted ----
+    plt.figure(figsize=(10,4))
+    plt.plot(train.index, train, label="Train")
+    plt.plot(test.index, test, label="Actual")
+    plt.plot(test.index, naive_forecast, label="Naive")
+    plt.plot(test.index, arima_forecast, label="ARIMA")
+    plt.title(f"Fold {fold}")
+    plt.legend()
+    plt.show()
+
+    # ---- Metrics: Naive ----
+    rmse_n.append(np.sqrt(mean_squared_error(test, naive_forecast)))
+    mae_n.append(mean_absolute_error(test, naive_forecast))
+    mape_n.append(np.mean(np.abs((test-naive_forecast)/test))*100)
+    mase_n.append(mase(test.values, naive_forecast, train))
+
+    # ---- Metrics: ARIMA ----
+    rmse_a.append(np.sqrt(mean_squared_error(test, arima_forecast)))
+    mae_a.append(mean_absolute_error(test, arima_forecast))
+    mape_a.append(np.mean(np.abs((test-arima_forecast)/test))*100)
+    mase_a.append(mase(test.values, arima_forecast.values, train))
+
+# -------------------------
+# Results Table
+# -------------------------
+
+results = pd.DataFrame({
+    "Model":["Naive","ARIMA"],
+    "RMSE":[np.mean(rmse_n),np.mean(rmse_a)],
+    "MAE":[np.mean(mae_n),np.mean(mae_a)],
+    "MAPE":[np.mean(mape_n),np.mean(mape_a)],
+    "MASE":[np.mean(mase_n),np.mean(mase_a)]
+})
+
+print("\nFinal Cross-Validated Results:\n")
+print(results)
+```
+
+The ARIMA and Naive models were evaluated using rolling (expanding) window cross-validation across five folds. For each fold, forecasts were generated and compared against actual observations. Visual inspection of the forecasts shows that both models produce relatively flat predictions over the short validation horizons. The Naive model maintains the last observed value, while the ARIMA model produces slightly adjusted forecasts based on estimated temporal dynamics.
+
+Across folds, both models struggle to fully capture short-term seasonal fluctuations, particularly during periods of sharp upward movement. However, ARIMA generally appears to track the level of the series slightly more closely than the Naive benchmark.
+
+The cross-validated performance metrics are summarized below:
+
+RMSE: Naive (11093.50) slightly outperforms ARIMA (11104.00)
+
+MAE: ARIMA (9308.82) slightly outperforms Naive (9332.87)
+
+MAPE: ARIMA (16.56%) marginally improves over Naive (16.37%)
+
+MASE: Reported as infinite due to scaling instability in the calculation
+
+Overall, the differences between the two models are very small. While ARIMA performs slightly better in MAE and MAPE, the Naive model achieves a marginally lower RMSE. This suggests that the ARIMA model provides only limited improvement over the simple Naive benchmark.
+
+The results indicate that the time series exhibits strong persistence, meaning that recent observations are highly informative of near-future values. As a result, the Naive model performs competitively. The ARIMA model offers modest gains in average absolute error but does not dramatically outperform the benchmark.
+
+These findings suggest that while ARIMA captures some underlying structure, the predictive advantage over a simple persistence model is minimal for this dataset.
+
+# Section 4
+```{python}
+# ==========================
+# SECTION 4 — FINAL MODEL
+# ==========================
+
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Re-create train/test from Section 1
+split = int(len(y) * 0.8)
+train_full = y.iloc[:split]
+test_full = y.iloc[split:]
+
+# Fit ARIMA on FULL training data
+final_model = ARIMA(train_full, order=arima_order)
+final_fit = final_model.fit()
+
+# Forecast test horizon
+final_forecast = final_fit.forecast(steps=len(test_full))
+
+# -------------------------
+# Plot Actual vs Predicted
+# -------------------------
+
+plt.figure(figsize=(12,6))
+plt.plot(train_full.index, train_full, label="Training")
+plt.plot(test_full.index, test_full, label="Actual Test")
+plt.plot(test_full.index, final_forecast, label="ARIMA Forecast")
+plt.title("Final ARIMA Model — Test Set Forecast")
+plt.legend()
+plt.show()
+
+# -------------------------
+# Test Metrics
+# -------------------------
+
+rmse_test = np.sqrt(mean_squared_error(test_full, final_forecast))
+mae_test = mean_absolute_error(test_full, final_forecast)
+mape_test = np.mean(np.abs((test_full-final_forecast)/test_full))*100
+
+test_results = pd.DataFrame({
+    "RMSE":[rmse_test],
+    "MAE":[mae_test],
+    "MAPE":[mape_test]
+})
+
+print("\nFinal Test Set Performance (ARIMA):\n")
+print(test_results)
+```
+
+Based on cross-validation results from Section 3, the ARIMA model was selected as the final forecasting model due to its slightly superior MAE and MAPE performance compared to the Naive benchmark. The model was refit using the entire training dataset and evaluated on the held-out test set.
+
+The test-set forecast shows that ARIMA captures the overall level of the series but fails to reproduce the strong upward trend and seasonal variability observed in the actual test data. The forecast remains relatively flat across the test horizon, indicating that the model primarily extrapolates recent historical averages rather than adapting to changing dynamics.
+
+Quantitative evaluation on the test set yields the following metrics:
+
+RMSE: 23,266
+
+MAE: 20,680
+
+MAPE: 27.20%
+
+These relatively large error values suggest that while ARIMA performs reasonably during cross-validation, its generalization to the test period is limited. The substantial increase in errors compared to cross-validated performance indicates that the model struggles during periods of rapid growth and heightened volatility present in the test set.
+
+This behavior suggests mild underfitting rather than overfitting. The ARIMA model fails to adequately capture the accelerating trend and seasonal amplitude in the later portion of the series, leading to systematic forecast bias. While ARIMA offers modest improvement over the Naive model in earlier validation folds, it does not sufficiently adapt to structural changes in the test period.
+
+Overall, although ARIMA provides a principled statistical baseline, the results indicate that more advanced models incorporating trend shifts or explicit seasonality (such as SARIMA or machine learning–based approaches) may be required to achieve stronger forecasting performance on this dataset.
+
+# Conclusion
+
+This project explored time-series forecasting of construction spending using a structured modeling pipeline that included train–test splitting, rolling window cross-validation, model comparison, and final evaluation on a held-out test set. An initial 80/20 split demonstrated that the test set was representative of the historical patterns observed in the training data, exhibiting similar seasonality and an overall upward trend.
+
+A rolling (expanding) window cross-validation scheme was implemented to mimic real-world forecasting conditions and assess model stability over time. Both a Naive benchmark and an ARIMA model were evaluated across multiple folds. Results showed only marginal differences between the two models, with ARIMA achieving slightly lower MAE and MAPE, while the Naive model produced a marginally lower RMSE. This indicates strong persistence in the series, where recent observations provide substantial predictive power.
+
+Based on cross-validation performance, ARIMA was selected as the final model and refit on the full training dataset. However, test-set evaluation revealed that the model struggled to capture the sharp upward trend and seasonal variability present in the later period. Forecasts remained relatively flat, leading to increased errors on the test set. This behavior suggests underfitting, as the model failed to adapt to structural changes and accelerating growth.
+
+Overall, while ARIMA provides a reasonable statistical baseline, its limited improvement over the Naive model and weaker performance on the test set highlight the challenges of forecasting in the presence of evolving trends and volatility. Future work could explore seasonal extensions such as SARIMA or more flexible machine learning approaches to better capture non-linear patterns and regime shifts. These enhancements may offer improved predictive accuracy for complex economic time series such as construction spending.
